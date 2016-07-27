@@ -22,14 +22,19 @@ import com.mongodb.MongoClient;
 
 import java.io.File;
 import java.io.IOException;
+import java.math.BigInteger;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.text.SimpleDateFormat;
 import java.util.*;
 
 import static java.nio.file.StandardOpenOption.CREATE;
 import static java.nio.file.StandardOpenOption.WRITE;
+
+import org.bitbucket.dollar.Dollar;
+import org.bitbucket.dollar.Dollar.*;
 
 //import scala.tools.cmd.gen.AnyVals;
 
@@ -84,6 +89,26 @@ class WorkerPoolProtocol {
         return new Reply(data);
     }
 
+    public static class Database_msg{
+        public final int offset;
+        public final Date timestamp;
+        public final int chunkname;
+        public final String filename;
+        public Database_msg(String filename, Date timestamp, int chunkname, int offset  ){
+            this.chunkname = chunkname;
+            this.filename = filename;
+            this.offset = offset;
+            this.timestamp = timestamp;
+        }
+        @Override
+        public String toString() {
+            return String.format("Offset(%s)", offset);
+        }
+    }
+    public static Database_msg database_msg(String filename, Date timestamp, int chunkname, int offset) {
+        return new Database_msg(filename, timestamp, chunkname, offset);
+    }
+
 
     public static class Done {
         public final ByteString data;
@@ -123,6 +148,7 @@ class WorkerPoolProtocol {
 
 }
 
+
  class WorkerPool extends AbstractActorSubscriber {
 
     public static Props props() { return Props.create(WorkerPool.class); }
@@ -148,82 +174,87 @@ class WorkerPoolProtocol {
         for (int i = 0; i < workerCount*2; i++)
             routees.add(new ActorRefRoutee(context().actorOf(Props.create(Worker.class, i))));
         router = new Router(new RoundRobinRoutingLogic(), routees);
+        ActorRef databaseActor = context().actorOf(Props.create(DatabaseActor.class));
 
         receive(ReceiveBuilder.
                 match(ActorSubscriberMessage.OnNext.class, on -> on.element() instanceof WorkerPoolProtocol.Msg,
                         onNext -> {
                             WorkerPoolProtocol.Msg msg = (WorkerPoolProtocol.Msg) onNext.element();
-                            queue.put(msg.data, msg.replyTo);
-
-                            if (queue.size() > MAX_QUEUE_SIZE)
-                                throw new RuntimeException("queued too many: " + queue.size());
+//                            queue.put(msg.data, msg.replyTo);
+//
+//                            if (queue.size() > MAX_QUEUE_SIZE)
+//                                throw new RuntimeException("queued too many: " + queue.size());
 
                             router.route(WorkerPoolProtocol.work(msg.data), self());
                         }).
-                match(WorkerPoolProtocol.Reply.class, reply -> {
-                    ByteString data = reply.data;
-                    queue.get(data).tell(WorkerPoolProtocol.done(data), self());
-                    queue.remove(data);
+                match(WorkerPoolProtocol.Database_msg.class, database_msg -> {
+                    databaseActor.tell(database_msg, self());
                 }).
+//                match(WorkerPoolProtocol.Reply.class, reply -> {
+//                    ByteString data = reply.data;
+//                    queue.get(data).tell(WorkerPoolProtocol.done(data), self());
+//                    queue.remove(data);
+//                }).
                 build());
     }
 }
 
 class Worker extends AbstractActor {
-    public static int byteArrayToLeInt(byte[] encodedValue) {
-        int value = (encodedValue[3] << (Byte.SIZE * 3));
-        value |= (encodedValue[2] & 0xFF) << (Byte.SIZE * 2);
-        value |= (encodedValue[1] & 0xFF) << (Byte.SIZE * 1);
-        value |= (encodedValue[0] & 0xFF);
-        return value;
-    }
-
-    public static int byteArrayToLeShort(byte[] encodedValue) {
-        int value = ((encodedValue[0]& 0xFF) << (Byte.SIZE * 1));
-        value |= (encodedValue[1] & 0xFF);
-        return value;
-    }
-
-    final protected static char[] hexArray = "0123456789ABCDEF".toCharArray();
-
-    public static String bytesToHex(byte[] bytes) {
-        char[] hexChars = new char[bytes.length * 2];
-        for ( int j = 0; j < bytes.length; j++ ) {
-            int v = bytes[j] & 0xFF;
-            hexChars[j * 2] = hexArray[v >>> 4];
-            hexChars[j * 2 + 1] = hexArray[v & 0x0F];
-        }
-        return new String(hexChars);
-    }
+    final List<Integer> validEthertypes =
+            Dollar.$(Integer.parseInt("800", 16), Integer.parseInt("808", 16))
+                    .concat(Dollar.$(Integer.parseInt("0", 16), Integer.parseInt("5dc", 16)))
+                    .concat(Dollar.$(Integer.parseInt("884", 16), Integer.parseInt("89a", 16)))
+                    .concat(Dollar.$(Integer.parseInt("884", 16), Integer.parseInt("89a", 16)))
+                    .concat(Dollar.$(Integer.parseInt("b00", 16), Integer.parseInt("b07", 16)))
+                    .concat(Dollar.$(Integer.parseInt("bad", 16), Integer.parseInt("baf", 16)))
+                    .concat(Dollar.$(Integer.parseInt("1000", 16), Integer.parseInt("10ff", 16)))
+                    .concat(Dollar.$(Integer.parseInt("2000", 16), Integer.parseInt("207f", 16)))
+                    .concat(Dollar.$(Integer.parseInt("22e0", 16), Integer.parseInt("22f2", 16)))
+                    .concat(Dollar.$(Integer.parseInt("86dd", 16), Integer.parseInt("8fff", 16)))
+                    .concat(Dollar.$(Integer.parseInt("9000", 16), Integer.parseInt("9003", 16)))
+                    .concat(Dollar.$(Integer.parseInt("9040", 16), Integer.parseInt("905f", 16)))
+                    .concat(Dollar.$(Integer.parseInt("c020", 16), Integer.parseInt("c02f", 16)))
+                    .concat(Dollar.$(Integer.parseInt("c220", 16), Integer.parseInt("c22f", 16)))
+                    .concat(Dollar.$(Integer.parseInt("fea0", 16), Integer.parseInt("feaf", 16)))
+                    .concat(Dollar.$(Integer.parseInt("ff00", 16), Integer.parseInt("ff0f", 16)))
+                    .concat(Integer.parseInt("81c", 16)).concat(Integer.parseInt("844", 16))
+                    .concat(Integer.parseInt("900", 16)).concat(Integer.parseInt("a00", 16))
+                    .concat(Integer.parseInt("a01", 16)).concat(Integer.parseInt("22df", 16))
+                    .concat(Integer.parseInt("9999", 16)).concat(Integer.parseInt("9c40", 16))
+                    .concat(Integer.parseInt("a580", 16)).concat(Integer.parseInt("fc0f", 16))
+                    .concat(Integer.parseInt("ffff", 16)).sort().toList();
 
     public Worker(int nodeId) {
-        //System.out.println(self());
+
         receive(ReceiveBuilder.
                 match(WorkerPoolProtocol.Work.class, work -> {
                     ByteIterator it = work.data.iterator();
                     ByteIterator itCopy;
-                    it.getLong(ByteOrder.nativeOrder());
-                    it.getLong(ByteOrder.nativeOrder());
-                    it.getLong(ByteOrder.nativeOrder());
+                    int ts_usec = 0;
+                    int ts_sec = 0;
                     int bytesSkip = 0;
-                    long timestamp = 0;
-                    byte[] date = new byte[4];
-                    //int date = 0;
-                    while(it.hasNext()){
-                        itCopy = it.clone();
-                        itCopy.getInt(ByteOrder.BIG_ENDIAN);
-                        itCopy.getBytes(date);
-                        //timestamp = itCopy.getLong(ByteOrder.BIG_ENDIAN);
 
-                        if (itCopy.getInt(ByteOrder.nativeOrder())==itCopy.getInt(ByteOrder.nativeOrder())) {
+                    while (it.hasNext()) {
+                        itCopy = it.clone();
+                        ts_sec = itCopy.getInt(ByteOrder.LITTLE_ENDIAN);
+                        ts_usec = itCopy.getInt(ByteOrder.LITTLE_ENDIAN);
+                        int incl_len = itCopy.getInt(ByteOrder.nativeOrder());
+                        int orig_len = itCopy.getInt(ByteOrder.nativeOrder());
+                        itCopy.getBytes(12);
+                        int ether_type = itCopy.getShort(ByteOrder.LITTLE_ENDIAN);
+                        if (incl_len == orig_len
+                                && incl_len <= 65535 && incl_len >= 41
+                                && ts_sec > 964696316
+                                && validEthertypes.contains(ether_type))
                             break;
-                        }
                         else
                             it.next();
-                            bytesSkip ++;
+                        bytesSkip++;
                     }
-                    System.out.println(new Date(byteArrayToLeInt(date)));
-                    System.out.println(bytesSkip);
+                    Date timestamp = new Date(ts_sec * 1000L + ts_usec / 1000);
+                    int chunkname = work.data.hashCode();
+                    System.out.println(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS").format(timestamp));
+                    //System.out.println(bytesSkip);
                     Path path = Paths.get("/tmp/" + nodeId);
                     //if directory exists?
                     if (!Files.exists(path)) {
@@ -234,9 +265,10 @@ class Worker extends AbstractActor {
                             e.printStackTrace();
                         }
                     }
-                    Files.newByteChannel(Paths.get("/tmp/"+ nodeId +"/" + work.data.hashCode()),CREATE, WRITE ).write(work.data.toByteBuffer());
+                    Files.newByteChannel(Paths.get("/tmp/" + nodeId + "/" + chunkname), CREATE, WRITE).write(work.data.toByteBuffer());
                     //Files.write(Paths.get("/tmp/"+ nodeId +"/" + work.data.hashCode()), work.data.toByteBuffer());
-                    sender().tell(WorkerPoolProtocol.reply(work.data), self());
+                    sender().tell(WorkerPoolProtocol.database_msg("bigFlows.pcap", timestamp, chunkname, bytesSkip), self());
+                    //sender().tell(WorkerPoolProtocol.reply(work.data), self());
                 }).build());
     }
 }
@@ -252,16 +284,19 @@ class ClientActor extends UntypedActor {
 class DatabaseActor extends UntypedActor {
     @Override
     public void onReceive(Object message) throws Exception {
-        MongoClient mongo = new MongoClient( "localhost" , 27017 );
-        DB db = mongo.getDB("akka");
-        BasicDBObject document = new BasicDBObject();
-        document.put("filename", "ipp.pcap");
-        document.put("timestamp", new Date());
-        document.put("actorRef", 1);
-        document.put("bytesSkip", 50);
-        DBCollection table = db.getCollection("test");
-        table.insert(document);
-        // System.out.println(sender());
+ //       if (message instanceof WorkerPoolProtocol.Database_msg) {
+            System.out.println(message.toString());
+//        MongoClient mongo = new MongoClient( "localhost" , 27017 );
+//        DB db = mongo.getDB("akka");
+//        BasicDBObject document = new BasicDBObject();
+//        document.put("filename", "ipp.pcap");
+//        document.put("timestamp", new Date());
+//        document.put("actorRef", 1);
+//        document.put("bytesSkip", 50);
+//        DBCollection table = db.getCollection("test");
+//        table.insert(document);
+            // System.out.println(sender());
+ //       }
     }
 }
 
@@ -269,14 +304,14 @@ public class Application {
   public static void main(String[] args) throws IOException {
     final ActorSystem system = ActorSystem.create("Sys");
     final ActorMaterializer materializer = ActorMaterializer.create(system);
-    final Integer chunkSize = 1024 * 100; //bytes
-    final String inPath = "/home/laboshinl/workspace/akka-pcap/src/main/resources/ipp.pcap";
+    final Integer chunkSize = 1024 * 1024 * 20; //bytes
+    final String inPath = "/home/laboshinl/Downloads/bigFlows.pcap";
     final File inputFile = new File(inPath);
 
-    ActorRef replyTo = system.actorOf(Props.create(DatabaseActor.class));
+//    ActorRef replyTo = system.actorOf(Props.create(DatabaseActor.class));
 
     FileIO.fromFile(inputFile, chunkSize)
-            .map(i -> WorkerPoolProtocol.msg(i, replyTo))
+            .map(i -> WorkerPoolProtocol.msg(i, ActorRef.noSender()))
             .runWith(Sink.<WorkerPoolProtocol.Msg>actorSubscriber(WorkerPool.props()), materializer);
   }
 
