@@ -15,10 +15,7 @@ import akka.stream.javadsl.FileIO;
 import akka.stream.javadsl.Sink;
 import akka.util.ByteIterator;
 import akka.util.ByteString;
-import com.mongodb.BasicDBObject;
-import com.mongodb.DB;
-import com.mongodb.DBCollection;
-import com.mongodb.MongoClient;
+import com.mongodb.*;
 
 import java.io.File;
 import java.io.IOException;
@@ -102,7 +99,7 @@ class WorkerPoolProtocol {
         }
         @Override
         public String toString() {
-            return String.format("Offset(%s)", offset);
+            return String.format("Name (%s) time(%s)  chunk(%s) offset(%s)", filename, timestamp, chunkname, offset   );
         }
     }
     public static Database_msg database_msg(String filename, Date timestamp, int chunkname, int offset) {
@@ -253,7 +250,7 @@ class Worker extends AbstractActor {
                     }
                     Date timestamp = new Date(ts_sec * 1000L + ts_usec / 1000);
                     int chunkname = work.data.hashCode();
-                    System.out.println(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS").format(timestamp));
+                    //System.out.println(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS").format(timestamp));
                     //System.out.println(bytesSkip);
                     Path path = Paths.get("/tmp/" + nodeId);
                     //if directory exists?
@@ -284,19 +281,30 @@ class ClientActor extends UntypedActor {
 class DatabaseActor extends UntypedActor {
     @Override
     public void onReceive(Object message) throws Exception {
- //       if (message instanceof WorkerPoolProtocol.Database_msg) {
-            System.out.println(message.toString());
-//        MongoClient mongo = new MongoClient( "localhost" , 27017 );
-//        DB db = mongo.getDB("akka");
-//        BasicDBObject document = new BasicDBObject();
-//        document.put("filename", "ipp.pcap");
-//        document.put("timestamp", new Date());
-//        document.put("actorRef", 1);
-//        document.put("bytesSkip", 50);
-//        DBCollection table = db.getCollection("test");
-//        table.insert(document);
-            // System.out.println(sender());
- //       }
+       if (message instanceof WorkerPoolProtocol.Database_msg) {
+//            System.out.println(message.toString());
+            MongoClient mongo = new MongoClient( "localhost" , 27017 );
+            DB db = mongo.getDB("test");
+//            BasicDBObject document = new BasicDBObject();
+//            document.put("filename", ((WorkerPoolProtocol.Database_msg) message).filename);
+//            document.put("timestamp", ((WorkerPoolProtocol.Database_msg) message).timestamp);
+//            document.put("actorRef", 1);
+//            document.put("bytesSkip", ((WorkerPoolProtocol.Database_msg) message).offset);
+//            document.put("chunkname", ((WorkerPoolProtocol.Database_msg) message).chunkname);
+            DBCollection table = db.getCollection("test");
+//            table.insert(document);
+
+           BasicDBObject whereQuery = new BasicDBObject();
+           whereQuery.put("filename", "bigFlows.pcap");
+           whereQuery.put("timestamp", new BasicDBObject("$gt", ((WorkerPoolProtocol.Database_msg) message).timestamp));
+           System.out.println(table.find(whereQuery).sort(new BasicDBObject("timestamp",1)).limit(1).next().get("chunkname"));
+
+//           DBCursor cursor = table.find(whereQuery);
+//           while(cursor.hasNext()) {
+//               System.out.println(cursor.next());
+//           }
+//                 System.out.println(sender());
+            }
     }
 }
 
